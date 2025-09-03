@@ -222,8 +222,11 @@ $username = isset($_SESSION['username']) ? $_SESSION['username'] : null;
                 // messages
                 if (Array.isArray(data.messages) && data.messages.length > 0) {
                     data.messages.forEach(m => {
-                        appendMessage(m);
-                        if (m.id > lastId) lastId = m.id;
+                        // avoid duplicates: only append messages with id > lastId
+                        if (m.id > lastId) {
+                            appendMessage(m);
+                            lastId = Math.max(lastId, m.id);
+                        }
                     });
                 }
                 // rooms
@@ -254,7 +257,7 @@ $username = isset($_SESSION['username']) ? $_SESSION['username'] : null;
         }
     }
 
-    // Envio de mensagem
+    // Envio de mensagem (agora insere no DOM imediatamente usando resposta do servidor)
     form.addEventListener('submit', async function(e) {
         e.preventDefault();
         const text = input.value.trim();
@@ -273,15 +276,41 @@ $username = isset($_SESSION['username']) ? $_SESSION['username'] : null;
                 body: payload,
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
             });
+            const data = await resp.json().catch(() => null);
             if (!resp.ok) {
-                const err = await resp.json().catch(() => null);
-                alert((err && err.error) ? err.error : 'Erro ao enviar mensagem.');
+                alert((data && data.error) ? data.error : 'Erro ao enviar mensagem.');
                 return;
             }
+            // se servidor retornou o objeto da mensagem, adiciona imediatamente e atualiza lastId
+            if (data && data.message) {
+                appendMessage(data.message);
+                if (data.message.id && data.message.id > lastId) lastId = data.message.id;
+            } else if (data && data.id) {
+                // fallback: criar mensagem temporária (pouco provável com a nova API)
+                const tmp = {
+                    id: data.id,
+                    user: myUser,
+                    text: text,
+                    time: new Date().toISOString()
+                };
+                appendMessage(tmp);
+                if (data.id > lastId) lastId = data.id;
+            } else {
+                // fallback simples: append a message with current time (sem id)
+                const tmp = {
+                    id: lastId + 1,
+                    user: myUser,
+                    text: text,
+                    time: new Date().toISOString()
+                };
+                appendMessage(tmp);
+                lastId = tmp.id;
+            }
+
             input.value = '';
             input.focus();
-            // message will be received via polling
-            sendTyping(false); // stop typing
+            // stop typing indicator
+            sendTyping(false);
         } catch (err) {
             console.error('Erro ao enviar:', err);
             alert('Erro ao enviar mensagem.');

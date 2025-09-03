@@ -81,9 +81,6 @@ if ($action === 'get') {
             $messages = [];
             if ($recipient) {
                 // Private conversation between me and recipient
-                $stmt = $pdo->prepare('SELECT id, user, text, time FROM messages WHERE id > :last AND recipient = :rec AND ((user = :me) OR (user = :rec)) ORDER BY id ASC');
-                // This ensures messages sent to recipient or to me where participant is either user
-                // But better to include both directions:
                 $stmt = $pdo->prepare('SELECT id, user, text, time FROM messages WHERE id > :last AND ((recipient = :rec AND user = :me) OR (recipient = :me AND user = :rec)) ORDER BY id ASC');
                 $stmt->execute([':last' => $last_id, ':rec' => $recipient, ':me' => $me]);
                 $messages = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -121,16 +118,14 @@ if ($action === 'get') {
                 }
             }
 
-            if (count($messages) > 0 || true) {
-                // Always return current state (messages may be empty). Long-polling ensures near-real-time for messages.
-                echo json_encode([
-                    'messages' => $messages,
-                    'rooms' => $rooms,
-                    'users' => $users,
-                    'typing' => $typing
-                ], JSON_UNESCAPED_UNICODE);
-                exit;
-            }
+            // Always return current state (messages may be empty). Long-polling ensures near-real-time for messages.
+            echo json_encode([
+                'messages' => $messages,
+                'rooms' => $rooms,
+                'users' => $users,
+                'typing' => $typing
+            ], JSON_UNESCAPED_UNICODE);
+            exit;
         } catch (PDOException $e) {
             http_response_code(500);
             echo json_encode(['error' => 'Erro ao ler mensagens: ' . $e->getMessage()]);
@@ -170,7 +165,7 @@ if ($action === 'get') {
             ':room' => $room,
             ':recipient' => $recipient
         ]);
-        $newId = $pdo->lastInsertId();
+        $newId = (int)$pdo->lastInsertId();
 
         // Atualiza usuário presença
         touch_user($pdo, $me, $room);
@@ -178,8 +173,15 @@ if ($action === 'get') {
         // Limita histórico a 500 mensagens
         $pdo->exec('DELETE FROM messages WHERE id NOT IN (SELECT id FROM messages ORDER BY id DESC LIMIT 500);');
 
+        // Buscar a mensagem recém inserida para retornar ao cliente
+        $stmt2 = $pdo->prepare('SELECT id, user, text, time, room, recipient FROM messages WHERE id = :id LIMIT 1');
+        $stmt2->execute([':id' => $newId]);
+        $row = $stmt2->fetch(PDO::FETCH_ASSOC);
+
         $pdo->commit();
-        echo json_encode(['ok' => true, 'id' => (int)$newId], JSON_UNESCAPED_UNICODE);
+
+        // Retorna o objeto completo da mensagem para que o cliente possa adicionar imediatamente ao DOM
+        echo json_encode(['ok' => true, 'id' => $newId, 'message' => $row], JSON_UNESCAPED_UNICODE);
         exit;
     } catch (PDOException $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
